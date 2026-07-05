@@ -162,13 +162,15 @@
 
   <script>
     const GAS_URL = "https://script.google.com/macros/s/AKfycbx_DkMwA2ubHzqfV8nhrPPGnnTSAWR5YQRkX5GeERk2ixMt8cdnAvHQTofTd-sy2Zas9g/exec";
+    const QUEUE_KEY = 'inboxQueue';
     
     const dateDisplay = document.getElementById('dateDisplay');
     const topicInput = document.getElementById('topic');
     const contentInput = document.getElementById('content');
     const saveBtn = document.getElementById('saveBtn');
     
-    // 日付を表示（JST）
+    let isSending = false;
+    
     function updateDateDisplay() {
       const now = new Date();
       const year = now.getFullYear();
@@ -177,43 +179,67 @@
       dateDisplay.textContent = `${year}-${month}-${day}`;
     }
     
-    // 初期化
     updateDateDisplay();
     
-    // localStorage から前回のデータを復元
-    function loadFromStorage() {
-      const saved = localStorage.getItem('inboxDraft');
-      if (saved) {
-        const draft = JSON.parse(saved);
-        topicInput.value = draft.topic || '';
-        contentInput.value = draft.content || '';
+    function getQueue() {
+      try {
+        return JSON.parse(localStorage.getItem(QUEUE_KEY)) || [];
+      } catch {
+        return [];
       }
     }
     
-    // localStorage に保存（オートセーブ）
-    function saveToStorage() {
-      const draft = {
-        topic: topicInput.value,
-        content: contentInput.value,
-        timestamp: new Date().toISOString()
-      };
-      localStorage.setItem('inboxDraft', JSON.stringify(draft));
+    function setQueue(queue) {
+      localStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
     }
     
-    // トースト表示
+    function addToQueue(item) {
+      const queue = getQueue();
+      queue.push(item);
+      setQueue(queue);
+    }
+    
     function showToast(message, type = 'success') {
       const toast = document.createElement('div');
       toast.className = `toast ${type}`;
       toast.textContent = message;
       document.body.appendChild(toast);
-      
-      setTimeout(() => {
-        toast.remove();
-      }, 2000);
+      setTimeout(() => toast.remove(), 2000);
     }
     
-    // 保存処理
-    async function handleSave() {
+    // 未送信キューを裏で順番に送信（待たない、失敗しても残す）
+    async function flushQueue() {
+      if (isSending) return;
+      isSending = true;
+      
+      let queue = getQueue();
+      
+      while (queue.length > 0) {
+        const item = queue[0];
+        try {
+          const response = await fetch(GAS_URL, {
+            method: 'POST',
+            body: JSON.stringify(item)
+          });
+          const result = await response.json();
+          
+          if (result.status === 'success') {
+            queue.shift();
+            setQueue(queue);
+          } else {
+            break;
+          }
+        } catch (error) {
+          console.error('送信エラー、後で再試行:', error);
+          break;
+        }
+      }
+      
+      isSending = false;
+    }
+    
+    // 保存処理（即座にクリア、裏で送信）
+    function handleSave() {
       const topic = topicInput.value.trim();
       const content = contentInput.value.trim();
       
@@ -222,49 +248,22 @@
         return;
       }
       
-      saveBtn.disabled = true;
+      addToQueue({ topic, content });
+      topicInput.value = '';
+      contentInput.value = '';
+      topicInput.focus();
+      showToast('保存されました');
       
-      try {
-        const response = await fetch(GAS_URL, {
-          method: 'POST',
-          body: JSON.stringify({
-            topic: topic,
-            content: content
-          })
-        });
-        
-        const result = await response.json();
-        
-        if (result.status === 'success') {
-          showToast('保存されました');
-          topicInput.value = '';
-          contentInput.value = '';
-          localStorage.removeItem('inboxDraft');
-        } else {
-          showToast('保存に失敗しました', 'error');
-        }
-      } catch (error) {
-        showToast('通信エラーが発生しました', 'error');
-        console.error(error);
-      } finally {
-        saveBtn.disabled = false;
-      }
+      flushQueue();
     }
     
-    // イベントリスナー
     saveBtn.addEventListener('click', handleSave);
     
-    topicInput.addEventListener('change', saveToStorage);
-    contentInput.addEventListener('change', saveToStorage);
+    // 起動時に未送信分があれば裏で送信を試みる
+    flushQueue();
     
-    // ページロード時に復元
-    loadFromStorage();
-    
-    // PWA マニフェスト登録
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js').catch(() => {
-        // SW 登録失敗時は無視
-      });
+      navigator.serviceWorker.register('sw.js').catch(() => {});
     }
   </script>
 </body>
