@@ -322,11 +322,11 @@
     
     // ─── Inbox 保存 ───
     function handleSave() {
-      const topic = topicInput.value.trim();
+      const topic = topicInput.value.trim() || 'メモ';
       const content = contentInput.value.trim();
       
-      if (!topic || !content) {
-        showToast('トピックと内容を入力してください', 'error');
+      if (!content) {
+        showToast('内容を入力してください', 'error');
         return;
       }
       
@@ -339,18 +339,52 @@
       flushQueue();
     }
     
+    // ─── 自覚ログ フォーマット自動統一 ───
+    // どんな#の数で貼り付けられても、統一フォーマットに正規化する
+    // タイトル行（自覚ログ｜日付）→ "### 自覚ログ｜..."
+    // 4項目見出し（起きていた現象など）→ "#### 見出し"
+    function normalizeJikaku(text) {
+      const categoryNames = ['起きていた現象', '見えていた向き', '言葉の作用', '今日の一文'];
+      const lines = text.split('\n');
+      
+      const normalized = lines.map(line => {
+        const trimmed = line.trim();
+        
+        // タイトル行の検出（先頭の#や空白を無視して「自覚ログ｜」を含むか）
+        const titleMatch = trimmed.match(/^#*\s*(自覚ログ｜.+)$/);
+        if (titleMatch) {
+          return '### ' + titleMatch[1];
+        }
+        
+        // 4項目見出しの検出
+        for (const name of categoryNames) {
+          const headingMatch = trimmed.match(new RegExp('^#*\\s*' + name + '\\s*$'));
+          if (headingMatch) {
+            return '#### ' + name;
+          }
+        }
+        
+        // それ以外の行はそのまま
+        return line;
+      });
+      
+      return normalized.join('\n');
+    }
+    
     // ─── 自覚ログ 保存 ───
     function handleSaveJikaku() {
-      const content = jikakuContent.value.trim();
+      const raw = jikakuContent.value.trim();
       
-      if (!content) {
+      if (!raw) {
         showToast('内容を貼り付けてください', 'error');
         return;
       }
       
+      const content = normalizeJikaku(raw);
+      
       addToQueue({ type: 'jikaku', date: todayStr(), content });
       jikakuContent.value = '';
-      showToast('保存されました');
+      showToast('保存されました（フォーマット統一済み）');
       
       flushQueue();
     }
