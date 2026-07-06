@@ -33,8 +33,37 @@
     h1 {
       font-size: 24px;
       font-weight: 600;
-      margin-bottom: 8px;
+      margin-bottom: 4px;
     }
+    
+    /* タブ */
+    .tabs {
+      display: flex;
+      gap: 4px;
+      border-bottom: 1px solid #eee;
+      margin-bottom: 4px;
+    }
+    
+    .tab-btn {
+      flex: 1;
+      padding: 10px 8px;
+      font-size: 14px;
+      font-weight: 500;
+      background: none;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: #999;
+      cursor: pointer;
+      border-radius: 0;
+    }
+    
+    .tab-btn.active {
+      color: #0066cc;
+      border-bottom-color: #0066cc;
+    }
+    
+    .tab-panel { display: none; flex-direction: column; gap: 12px; }
+    .tab-panel.active { display: flex; }
     
     .form-group {
       display: flex;
@@ -69,6 +98,13 @@
     textarea {
       resize: vertical;
       min-height: 100px;
+    }
+    
+    #jikakuContent {
+      min-height: 220px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 14px;
+      white-space: pre-wrap;
     }
     
     button {
@@ -134,53 +170,99 @@
 </head>
 <body>
   <h1>Inbox</h1>
-  
-  <div class="form-group">
-    <label>日付</label>
-    <div class="date-display" id="dateDisplay"></div>
+
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="inbox">Inbox</button>
+    <button class="tab-btn" data-tab="jikaku">自覚ログ</button>
   </div>
-  
-  <div class="form-group">
-    <label for="topic">トピック</label>
-    <input 
-      type="text" 
-      id="topic" 
-      placeholder="例：京都音楽博覧会" 
-      maxlength="100"
-    >
+
+  <!-- Inbox タブ -->
+  <div class="tab-panel active" id="tab-inbox">
+    <div class="form-group">
+      <label>日付</label>
+      <div class="date-display" id="dateDisplay"></div>
+    </div>
+    
+    <div class="form-group">
+      <label for="topic">トピック</label>
+      <input 
+        type="text" 
+        id="topic" 
+        placeholder="例：京都音楽博覧会" 
+        maxlength="100"
+      >
+    </div>
+    
+    <div class="form-group">
+      <label for="content">内容</label>
+      <textarea 
+        id="content" 
+        placeholder="気になったことを自由に書く"
+      ></textarea>
+    </div>
+    
+    <button id="saveBtn">保存</button>
   </div>
-  
-  <div class="form-group">
-    <label for="content">内容</label>
-    <textarea 
-      id="content" 
-      placeholder="気になったことを自由に書く"
-    ></textarea>
+
+  <!-- 自覚ログ タブ -->
+  <div class="tab-panel" id="tab-jikaku">
+    <div class="form-group">
+      <label>日付</label>
+      <div class="date-display" id="dateDisplayJikaku"></div>
+    </div>
+
+    <div class="form-group">
+      <label for="jikakuContent">壁打ち結果を貼り付け</label>
+      <textarea 
+        id="jikakuContent" 
+        placeholder="ChatGPTで出力した「自覚ログ｜YYYY-MM-DD」形式のテキストをそのまま貼り付け"
+      ></textarea>
+    </div>
+
+    <button id="saveJikakuBtn">保存</button>
   </div>
-  
-  <button id="saveBtn">保存</button>
 
   <script>
     const GAS_URL = "https://script.google.com/macros/s/AKfycbx_DkMwA2ubHzqfV8nhrPPGnnTSAWR5YQRkX5GeERk2ixMt8cdnAvHQTofTd-sy2Zas9g/exec";
     const QUEUE_KEY = 'inboxQueue';
     
     const dateDisplay = document.getElementById('dateDisplay');
+    const dateDisplayJikaku = document.getElementById('dateDisplayJikaku');
     const topicInput = document.getElementById('topic');
     const contentInput = document.getElementById('content');
     const saveBtn = document.getElementById('saveBtn');
+    const jikakuContent = document.getElementById('jikakuContent');
+    const saveJikakuBtn = document.getElementById('saveJikakuBtn');
     
     let isSending = false;
     
-    function updateDateDisplay() {
+    function todayStr() {
       const now = new Date();
       const year = now.getFullYear();
       const month = String(now.getMonth() + 1).padStart(2, '0');
       const day = String(now.getDate()).padStart(2, '0');
-      dateDisplay.textContent = `${year}-${month}-${day}`;
+      return `${year}-${month}-${day}`;
+    }
+    
+    function updateDateDisplay() {
+      const d = todayStr();
+      dateDisplay.textContent = d;
+      dateDisplayJikaku.textContent = d;
     }
     
     updateDateDisplay();
     
+    // ─── タブ切り替え ───
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+      });
+    });
+    
+    // ─── キュー共通処理 ───
     function getQueue() {
       try {
         return JSON.parse(localStorage.getItem(QUEUE_KEY)) || [];
@@ -238,7 +320,7 @@
       isSending = false;
     }
     
-    // 保存処理（即座にクリア、裏で送信）
+    // ─── Inbox 保存 ───
     function handleSave() {
       const topic = topicInput.value.trim();
       const content = contentInput.value.trim();
@@ -248,7 +330,7 @@
         return;
       }
       
-      addToQueue({ topic, content });
+      addToQueue({ type: 'inbox', topic, content });
       topicInput.value = '';
       contentInput.value = '';
       topicInput.focus();
@@ -257,7 +339,24 @@
       flushQueue();
     }
     
+    // ─── 自覚ログ 保存 ───
+    function handleSaveJikaku() {
+      const content = jikakuContent.value.trim();
+      
+      if (!content) {
+        showToast('内容を貼り付けてください', 'error');
+        return;
+      }
+      
+      addToQueue({ type: 'jikaku', date: todayStr(), content });
+      jikakuContent.value = '';
+      showToast('保存されました');
+      
+      flushQueue();
+    }
+    
     saveBtn.addEventListener('click', handleSave);
+    saveJikakuBtn.addEventListener('click', handleSaveJikaku);
     
     // 起動時に未送信分があれば裏で送信を試みる
     flushQueue();
