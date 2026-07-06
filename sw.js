@@ -1,3 +1,44 @@
-CACHE_NAME: 'inbox-v1' → 'inbox-v2'（バージョンが変わったと認識させる）
-+ skipWaiting() / clients.claim()（即座に新しいSWに切り替える）
-+ ネットワーク優先方式（今後は毎回最新を取りに行き、オフライン時だけキャッシュを使う）
+const CACHE_NAME = 'inbox-v2';
+const urlsToCache = [
+  './',
+  './index.html',
+  './manifest.json'
+];
+
+self.addEventListener('install', event => {
+  self.skipWaiting();
+  event.waitUntil(
+    caches.open(CACHE_NAME).then(cache => {
+      return cache.addAll(urlsToCache);
+    })
+  );
+});
+
+self.addEventListener('activate', event => {
+  event.waitUntil(
+    caches.keys().then(cacheNames => {
+      return Promise.all(
+        cacheNames.map(cacheName => {
+          if (cacheName !== CACHE_NAME) {
+            return caches.delete(cacheName);
+          }
+        })
+      );
+    }).then(() => self.clients.claim())
+  );
+});
+
+self.addEventListener('fetch', event => {
+  if (event.request.method !== 'GET') {
+    return;
+  }
+  
+  // ネットワーク優先、失敗したらキャッシュ
+  event.respondWith(
+    fetch(event.request).then(response => {
+      const clone = response.clone();
+      caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+      return response;
+    }).catch(() => caches.match(event.request))
+  );
+});
