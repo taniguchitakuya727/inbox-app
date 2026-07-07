@@ -166,6 +166,32 @@
       font-size: 14px;
       color: #666;
     }
+
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+      color: #333;
+      cursor: pointer;
+      padding: 4px 0;
+    }
+
+    .toggle-row input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+    }
+
+    .mini-settings {
+      font-size: 12px;
+      color: #999;
+    }
+
+    .mini-settings summary {
+      cursor: pointer;
+      padding: 4px 0;
+    }
+
   </style>
 </head>
 <body>
@@ -200,8 +226,25 @@
         placeholder="気になったことを自由に書く"
       ></textarea>
     </div>
+
+    <label class="toggle-row">
+      <input type="checkbox" id="crosspostBujoToggle">
+      <span>Bujoのタスクにもする</span>
+    </label>
     
     <button id="saveBtn">保存</button>
+
+    <details class="mini-settings">
+      <summary>連携設定</summary>
+      <div class="form-group" style="margin-top:8px;">
+        <label for="bujoGasUrlInput">Bujo GAS URL</label>
+        <input 
+          type="text" 
+          id="bujoGasUrlInput" 
+          placeholder="https://script.google.com/macros/s/.../exec"
+        >
+      </div>
+    </details>
   </div>
 
   <!-- 自覚ログ タブ -->
@@ -225,6 +268,8 @@
   <script>
     const GAS_URL = "https://script.google.com/macros/s/AKfycbx_DkMwA2ubHzqfV8nhrPPGnnTSAWR5YQRkX5GeERk2ixMt8cdnAvHQTofTd-sy2Zas9g/exec";
     const QUEUE_KEY = 'inboxQueue';
+    const BUJO_URL_KEY = 'bujoGasUrl';
+    const CROSSPOST_KEY = 'crosspostBujoEnabled';
     
     const dateDisplay = document.getElementById('dateDisplay');
     const dateDisplayJikaku = document.getElementById('dateDisplayJikaku');
@@ -233,8 +278,21 @@
     const saveBtn = document.getElementById('saveBtn');
     const jikakuContent = document.getElementById('jikakuContent');
     const saveJikakuBtn = document.getElementById('saveJikakuBtn');
+    const crosspostBujoToggle = document.getElementById('crosspostBujoToggle');
+    const bujoGasUrlInput = document.getElementById('bujoGasUrlInput');
     
     let isSending = false;
+    
+    // ─── Bujo連携設定の読み込み・保存（前回の状態を覚えておく） ───
+    bujoGasUrlInput.value = localStorage.getItem(BUJO_URL_KEY) || '';
+    crosspostBujoToggle.checked = localStorage.getItem(CROSSPOST_KEY) === 'true';
+    
+    bujoGasUrlInput.addEventListener('change', () => {
+      localStorage.setItem(BUJO_URL_KEY, bujoGasUrlInput.value.trim());
+    });
+    crosspostBujoToggle.addEventListener('change', () => {
+      localStorage.setItem(CROSSPOST_KEY, crosspostBujoToggle.checked ? 'true' : 'false');
+    });
     
     function todayStr() {
       const now = new Date();
@@ -289,7 +347,29 @@
       setTimeout(() => toast.remove(), 2000);
     }
     
+    // 保存ボタン自体のテキストを一瞬変える（キーボード表示中でも指の近くで見える）
+    let saveBtnTimer = null;
+    function flashSaveButton(text = '✓ 保存しました') {
+      const original = '保存';
+      saveBtn.textContent = text;
+      clearTimeout(saveBtnTimer);
+      saveBtnTimer = setTimeout(() => {
+        saveBtn.textContent = original;
+      }, 800);
+    }
+    
+    // Bujo用：GETリクエスト＋base64ペイロード方式（Bujo GASの仕様に合わせる）
+    async function sendToBujo(bujoUrl, payloadObj) {
+      const payload = btoa(unescape(encodeURIComponent(JSON.stringify(payloadObj))));
+      const url = bujoUrl + '?payload=' + encodeURIComponent(payload);
+      const response = await fetch(url);
+      const result = await response.json();
+      if (result.error) throw new Error(result.error);
+      return result;
+    }
+    
     // 未送信キューを裏で順番に送信（待たない、失敗しても残す）
+    // item.kind: 'inbox'（自分のGASにPOST） / 'bujo'（BujoのGASにGET+base64）
     async function flushQueue() {
       if (isSending) return;
       isSending = true;
@@ -299,18 +379,18 @@
       while (queue.length > 0) {
         const item = queue[0];
         try {
-          const response = await fetch(GAS_URL, {
-            method: 'POST',
-            body: JSON.stringify(item)
-          });
-          const result = await response.json();
-          
-          if (result.status === 'success') {
-            queue.shift();
-            setQueue(queue);
+          if (item.kind === 'bujo') {
+            await sendToBujo(item.bujoUrl, item.payload);
           } else {
-            break;
+            const response = await fetch(GAS_URL, {
+              method: 'POST',
+              body: JSON.stringify(item)
+            });
+            const result = await response.json();
+            if (result.status !== 'success') throw new Error(result.message || 'failed');
           }
+          queue.shift();
+          setQueue(queue);
         } catch (error) {
           console.error('送信エラー、後で再試行:', error);
           break;
@@ -330,11 +410,32 @@
         return;
       }
       
-      addToQueue({ type: 'inbox', topic, content });
+      addToQueue({ kind: 'inbox', type: 'inbox', topic, content });
+      
+      // トグルONかつBujo URL設定済みなら、Bujoにもタスクとして転記
+      const bujoUrl = localStorage.getItem(BUJO_URL_KEY);
+      if (crosspostBujoToggle.checked && bujoUrl) {
+        const bujoText = (topic && topic !== 'メモ') ? `${topic}: ${content}` : content;
+        addToQueue({
+          kind: 'bujo',
+          bujoUrl: bujoUrl,
+          payload: {
+            action: 'saveEntry',
+            id: 'ib_' + Date.now().toString(36) + Math.random().toString(36).slice(2,6),
+            date: todayStr(),
+            sym: '・',
+            text: bujoText,
+            state: 'open'
+          }
+        });
+      }
+      
       topicInput.value = '';
       contentInput.value = '';
       topicInput.focus();
-      showToast('保存されました');
+      const savedMsg = crosspostBujoToggle.checked && bujoUrl ? '保存されました（Bujoにも転記）' : '保存されました';
+      showToast(savedMsg);
+      flashSaveButton(crosspostBujoToggle.checked && bujoUrl ? '✓ 保存(Bujoにも)' : '✓ 保存しました');
       
       flushQueue();
     }
