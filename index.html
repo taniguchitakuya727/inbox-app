@@ -192,6 +192,94 @@
       padding: 4px 0;
     }
 
+    .calendar-toggle-btn {
+      background: none;
+      border: 0.5px solid #ddd;
+      color: #666;
+      font-size: 13px;
+      font-weight: 500;
+      padding: 8px 12px;
+      width: auto;
+      align-self: flex-start;
+    }
+    .calendar-toggle-btn:active {
+      opacity: 0.7;
+      transform: none;
+    }
+
+    .calendar-box {
+      display: none;
+      border: 0.5px solid #ddd;
+      border-radius: 8px;
+      padding: 12px;
+      background: #fafafa;
+    }
+    .calendar-box.open {
+      display: block;
+    }
+
+    .calendar-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .calendar-header button {
+      background: none;
+      border: 0.5px solid #ddd;
+      color: #333;
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      font-size: 16px;
+      border-radius: 6px;
+    }
+    .calendar-month-label {
+      font-size: 14px;
+      font-weight: 600;
+      color: #333;
+    }
+
+    .calendar-grid {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 4px;
+    }
+    .calendar-dow {
+      font-size: 10px;
+      color: #999;
+      text-align: center;
+      padding: 2px 0;
+    }
+    .calendar-day {
+      aspect-ratio: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      color: #333;
+      border-radius: 6px;
+      position: relative;
+    }
+    .calendar-day.empty {
+      visibility: hidden;
+    }
+    .calendar-day.today {
+      border: 1.5px solid #0066cc;
+      font-weight: 600;
+    }
+    .calendar-day.uploaded {
+      background: #22c55e;
+      color: #fff;
+      font-weight: 600;
+    }
+    .calendar-loading {
+      font-size: 12px;
+      color: #999;
+      text-align: center;
+      padding: 8px 0;
+    }
+
   </style>
 </head>
 <body>
@@ -252,6 +340,18 @@
     <div class="form-group">
       <label>日付</label>
       <div class="date-display" id="dateDisplayJikaku"></div>
+    </div>
+
+    <button type="button" class="calendar-toggle-btn" id="calendarToggleBtn">📅 カレンダーを表示</button>
+
+    <div class="calendar-box" id="calendarBox">
+      <div class="calendar-header">
+        <button type="button" id="calPrevBtn">‹</button>
+        <div class="calendar-month-label" id="calMonthLabel"></div>
+        <button type="button" id="calNextBtn">›</button>
+      </div>
+      <div id="calLoading" class="calendar-loading">読み込み中...</div>
+      <div class="calendar-grid" id="calGrid" style="display:none;"></div>
     </div>
 
     <div class="form-group">
@@ -487,9 +587,125 @@
       jikakuContent.value = '';
       showToast('保存されました（フォーマット統一済み）');
       
-      flushQueue();
+      flushQueue().then(() => {
+        // 送信完了後、カレンダーが開いていれば最新状態に更新
+        if (typeof refreshCalendarIfOpen === 'function') refreshCalendarIfOpen();
+      });
     }
     
+    // ─── 自覚ログ カレンダー ───
+    const CAL_OPEN_KEY = 'jikakuCalendarOpen';
+    const calendarToggleBtn = document.getElementById('calendarToggleBtn');
+    const calendarBox = document.getElementById('calendarBox');
+    const calPrevBtn = document.getElementById('calPrevBtn');
+    const calNextBtn = document.getElementById('calNextBtn');
+    const calMonthLabel = document.getElementById('calMonthLabel');
+    const calLoading = document.getElementById('calLoading');
+    const calGrid = document.getElementById('calGrid');
+
+    let uploadedDatesCache = null; // Set<'YYYY-MM-DD'>
+    let calViewYear, calViewMonth; // calViewMonth: 0-11
+
+    function initCalendarView() {
+      const now = new Date();
+      calViewYear = now.getFullYear();
+      calViewMonth = now.getMonth();
+    }
+    initCalendarView();
+
+    function setCalendarOpen(open) {
+      calendarBox.classList.toggle('open', open);
+      calendarToggleBtn.textContent = open ? '📅 カレンダーを隠す' : '📅 カレンダーを表示';
+      localStorage.setItem(CAL_OPEN_KEY, open ? 'true' : 'false');
+      if (open && !uploadedDatesCache) {
+        loadUploadedDates();
+      } else if (open) {
+        renderCalendar();
+      }
+    }
+
+    calendarToggleBtn.addEventListener('click', () => {
+      const isOpen = calendarBox.classList.contains('open');
+      setCalendarOpen(!isOpen);
+    });
+
+    calPrevBtn.addEventListener('click', () => {
+      calViewMonth--;
+      if (calViewMonth < 0) { calViewMonth = 11; calViewYear--; }
+      renderCalendar();
+    });
+    calNextBtn.addEventListener('click', () => {
+      calViewMonth++;
+      if (calViewMonth > 11) { calViewMonth = 0; calViewYear++; }
+      renderCalendar();
+    });
+
+    async function loadUploadedDates() {
+      calLoading.style.display = 'block';
+      calGrid.style.display = 'none';
+      try {
+        const response = await fetch(GAS_URL + '?type=jikaku_dates');
+        const result = await response.json();
+        uploadedDatesCache = new Set(result.dates || []);
+      } catch (error) {
+        console.error('カレンダーデータ取得失敗:', error);
+        uploadedDatesCache = new Set();
+      }
+      calLoading.style.display = 'none';
+      calGrid.style.display = 'grid';
+      renderCalendar();
+    }
+
+    function renderCalendar() {
+      if (!uploadedDatesCache) return;
+
+      calMonthLabel.textContent = `${calViewYear}年${calViewMonth + 1}月`;
+      calGrid.innerHTML = '';
+
+      ['日','月','火','水','木','金','土'].forEach(d => {
+        const el = document.createElement('div');
+        el.className = 'calendar-dow';
+        el.textContent = d;
+        calGrid.appendChild(el);
+      });
+
+      const firstDow = new Date(calViewYear, calViewMonth, 1).getDay();
+      const daysInMonth = new Date(calViewYear, calViewMonth + 1, 0).getDate();
+      const todayStrVal = todayStr();
+
+      for (let i = 0; i < firstDow; i++) {
+        const el = document.createElement('div');
+        el.className = 'calendar-day empty';
+        calGrid.appendChild(el);
+      }
+
+      for (let day = 1; day <= daysInMonth; day++) {
+        const m = String(calViewMonth + 1).padStart(2, '0');
+        const d = String(day).padStart(2, '0');
+        const dateStr = `${calViewYear}-${m}-${d}`;
+
+        const el = document.createElement('div');
+        el.className = 'calendar-day';
+        if (dateStr === todayStrVal) el.classList.add('today');
+        if (uploadedDatesCache.has(dateStr)) el.classList.add('uploaded');
+        el.textContent = day;
+        calGrid.appendChild(el);
+      }
+    }
+
+    // 前回の開閉状態を復元
+    if (localStorage.getItem(CAL_OPEN_KEY) === 'true') {
+      setCalendarOpen(true);
+    }
+
+    // 自覚ログ保存が成功した後、カレンダーが開いていればキャッシュを更新
+    function refreshCalendarIfOpen() {
+      if (calendarBox.classList.contains('open')) {
+        uploadedDatesCache = null;
+        loadUploadedDates();
+      }
+    }
+
     saveBtn.addEventListener('click', handleSave);
     saveJikakuBtn.addEventListener('click', handleSaveJikaku);
     
