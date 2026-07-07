@@ -617,10 +617,9 @@
       calendarBox.classList.toggle('open', open);
       calendarToggleBtn.textContent = open ? '📅 カレンダーを隠す' : '📅 カレンダーを表示';
       localStorage.setItem(CAL_OPEN_KEY, open ? 'true' : 'false');
-      if (open && !uploadedDatesCache) {
+      // 開くたびに毎回最新を取り直す（シートを直接編集した場合にも対応するため）
+      if (open) {
         loadUploadedDates();
-      } else if (open) {
-        renderCalendar();
       }
     }
 
